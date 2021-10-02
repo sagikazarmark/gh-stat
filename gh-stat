@@ -1,0 +1,286 @@
+#!/bin/bash
+set -e
+
+help() {
+    echo -e "Display various stats about your organization and repositories
+\033[1mUSAGE\033[0m
+  gh stat <stat> <resource> [flags]
+\033[1mAVAILABLE STATS\033[0m
+  stars:           Fetch data about stargazers
+  forks:           Fetch data about forks
+  issues:          Fetch data about issues
+  pull-requests:   Fetch data about pull-requests
+  commits:         Fetch data about commits
+\033[1mINHERITED FLAGS\033[0m
+  --help   Show help for command
+\033[1mARGUMENTS\033[0m
+  An resource can be supplied as argument in any of the following formats:
+  - organization or user, eg. \"MY_USER\"
+  - repository, e.g. \"MY_ORG/MY_REPO\".
+\033[1mEXAMPLES\033[0m
+  $ gh stat stars MY_ORG/MY_REPO --group-by month
+  $ gh stat forks MY_ORG/MY_REPO --group-by year
+  $ gh stat issues MY_ORG/MY_REPO --csv
+  $ gh stat commits MY_ORG/MY_REPO --branch master
+\033[1mLEARN MORE\033[0m
+  Use 'gh <command> <subcommand> --help' for more information about a command.
+  Read the manual at https://cli.github.com/manual
+"
+}
+
+# Default values of arguments
+STAT=""
+RESOURCE=""
+GROUP_BY="month"
+CSV=false
+BRANCH="master"
+HELP=false
+ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    key="$1"
+
+    case $key in
+    --group-by)
+        GROUP_BY="$2"
+        shift # past argument
+        shift # past value
+        ;;
+    --csv)
+        CSV=true
+        shift # Remove --csv from processing
+        ;;
+    --branch)
+        BRANCH="$2"
+        shift # past argument
+        shift # past value
+        ;;
+    -h | --help)
+        HELP=true
+        shift # Remove --help from processing
+        ;;
+    *)               # Unknown option (positional argument)
+        ARGS+=("$1") # Save it in an array for later
+        shift        # Remove argument from processing
+        ;;
+    esac
+done
+
+if [[ $HELP == true ]]; then
+    help
+    exit
+fi
+
+STAT="${ARGS[0]}"
+RESOURCE="${ARGS[1]}"
+
+if [[ $STAT == "" ]]; then
+    help
+    exit
+fi
+
+if [[ $RESOURCE == "" ]]; then
+    help
+    exit
+fi
+
+IFS='/' read OWNER REPO <<< "$RESOURCE"
+
+stat_stars() {
+    QUERY='
+    query($owner: String!, $name: String!, $endCursor: String) {
+        repository(owner: $owner, name: $name) {
+            stargazers(first: 100, after: $endCursor) {
+                edges {
+                    starredAt
+                }
+
+                pageInfo {
+                    hasNextPage
+                    endCursor
+                }
+            }
+        }
+    }
+    '
+
+    JQ_ARGS=""
+
+    CAPTURE="^[0-9]{4}-(0[1-9]|1[0-2])"
+    if [[ $GROUP_BY == "year" ]]; then
+        CAPTURE="^[0-9]{4}"
+    fi
+
+    FORMAT="map({starredAt: .[0].starredAt, count: length})"
+    if [[ $CSV == true ]]; then
+        FORMAT="map([.[0].starredAt, length]) | .[] | @csv"
+        JQ_ARGS="${JQ_ARGS} -r"
+    fi
+
+    JQ="[.[].starredAt | capture(\"(?<starredAt>${CAPTURE})\")] | group_by(.starredAt) | ${FORMAT}"
+
+    gh api graphql -F owner=$OWNER -F name=$REPO --paginate -f query="${QUERY}" --jq '.data.repository.stargazers.edges[]' | jq -s $JQ_ARGS "${JQ}"
+}
+
+stat_forks() {
+    QUERY='
+    query($owner: String!, $name: String!, $endCursor: String) {
+        repository(owner: $owner, name: $name) {
+            forks(first: 100, after: $endCursor) {
+                nodes {
+                    createdAt
+                }
+
+                pageInfo {
+                    hasNextPage
+                    endCursor
+                }
+            }
+        }
+    }
+    '
+
+    JQ_ARGS=""
+
+    CAPTURE="^[0-9]{4}-(0[1-9]|1[0-2])"
+    if [[ $GROUP_BY == "year" ]]; then
+        CAPTURE="^[0-9]{4}"
+    fi
+
+    FORMAT="map({createdAt: .[0].createdAt, count: length})"
+    if [[ $CSV == true ]]; then
+        FORMAT="map([.[0].createdAt, length]) | .[] | @csv"
+        JQ_ARGS="${JQ_ARGS} -r"
+    fi
+
+    JQ="[.[].createdAt | capture(\"(?<createdAt>${CAPTURE})\")] | group_by(.createdAt) | ${FORMAT}"
+
+    gh api graphql -F owner=$OWNER -F name=$REPO --paginate -f query="${QUERY}" --jq '.data.repository.forks.nodes[]' | jq -s $JQ_ARGS "${JQ}"
+}
+
+stat_issues() {
+    QUERY='
+    query($owner: String!, $name: String!, $endCursor: String) {
+        repository(owner: $owner, name: $name) {
+            issues(first: 100, after: $endCursor) {
+                nodes {
+                    createdAt
+                }
+
+                pageInfo {
+                    hasNextPage
+                    endCursor
+                }
+            }
+        }
+    }
+    '
+
+    JQ_ARGS=""
+
+    CAPTURE="^[0-9]{4}-(0[1-9]|1[0-2])"
+    if [[ $GROUP_BY == "year" ]]; then
+        CAPTURE="^[0-9]{4}"
+    fi
+
+    FORMAT="map({createdAt: .[0].createdAt, count: length})"
+    if [[ $CSV == true ]]; then
+        FORMAT="map([.[0].createdAt, length]) | .[] | @csv"
+        JQ_ARGS="${JQ_ARGS} -r"
+    fi
+
+    JQ="[.[].createdAt | capture(\"(?<createdAt>${CAPTURE})\")] | group_by(.createdAt) | ${FORMAT}"
+
+    gh api graphql -F owner=$OWNER -F name=$REPO --paginate -f query="${QUERY}" --jq '.data.repository.issues.nodes[]' | jq -s $JQ_ARGS "${JQ}"
+}
+
+stat_pull-requests() {
+    QUERY='
+    query($owner: String!, $name: String!, $endCursor: String) {
+        repository(owner: $owner, name: $name) {
+            pullRequests(first: 100, after: $endCursor) {
+                nodes {
+                    createdAt
+                }
+
+                pageInfo {
+                    hasNextPage
+                    endCursor
+                }
+            }
+        }
+    }
+    '
+
+    JQ_ARGS=""
+
+    CAPTURE="^[0-9]{4}-(0[1-9]|1[0-2])"
+    if [[ $GROUP_BY == "year" ]]; then
+        CAPTURE="^[0-9]{4}"
+    fi
+
+    FORMAT="map({createdAt: .[0].createdAt, count: length})"
+    if [[ $CSV == true ]]; then
+        FORMAT="map([.[0].createdAt, length]) | .[] | @csv"
+        JQ_ARGS="${JQ_ARGS} -r"
+    fi
+
+    JQ="[.[].createdAt | capture(\"(?<createdAt>${CAPTURE})\")] | group_by(.createdAt) | ${FORMAT}"
+
+    gh api graphql -F owner=$OWNER -F name=$REPO --paginate -f query="${QUERY}" --jq '.data.repository.pullRequests.nodes[]' | jq -s $JQ_ARGS "${JQ}"
+}
+
+stat_commits() {
+    QUERY='
+    query($owner: String!, $name: String!, $branch: String!, $endCursor: String) {
+        repository(owner: $owner, name: $name) {
+            ref(qualifiedName: $branch) {
+                target {
+                    ... on Commit {
+                        id
+                        history(first: 100, after: $endCursor) {
+                            edges {
+                                node {
+                                    author {
+                                        date
+                                    }
+                                }
+                            }
+
+                            pageInfo {
+                                hasNextPage
+                                endCursor
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    '
+
+    JQ_ARGS=""
+
+    CAPTURE="^[0-9]{4}-(0[1-9]|1[0-2])"
+    if [[ $GROUP_BY == "year" ]]; then
+        CAPTURE="^[0-9]{4}"
+    fi
+
+    FORMAT="map({date: .[0].date, count: length})"
+    if [[ $CSV == true ]]; then
+        FORMAT="map([.[0].date, length]) | .[] | @csv"
+        JQ_ARGS="${JQ_ARGS} -r"
+    fi
+
+    JQ="[.[].node.author.date | capture(\"(?<date>${CAPTURE})\")] | group_by(.date) | ${FORMAT}"
+
+    gh api graphql -F owner=$OWNER -F name=$REPO -F branch=$BRANCH --paginate -f query="${QUERY}" --jq '.data.repository.ref.target.history.edges[]' | jq -s $JQ_ARGS "${JQ}"
+}
+
+# Determine if an executable is in the PATH
+if ! type -p jq >/dev/null; then
+  echo "JQ not found on the system" >&2
+  exit 1
+fi
+
+stat_${STAT}
